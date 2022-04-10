@@ -1,0 +1,84 @@
+/*----------------------------------------------------------------------------------------------------------------------------------------------
+  Ray Marching Renderer
+	
+	Author -  Cole Barach
+	Created - 2022.02.11
+	Updated - 2022.04.10
+	
+	Function
+		-Compute Shader for Ray Marching Rendering
+        -Renders stack using RayMarchLibrary
+    Dependencies
+        -RayMarchLibrary
+----------------------------------------------------------------------------------------------------------------------------------------------*/
+
+#pragma kernel Render
+
+#include "RayMarchLibrary.cginc"
+
+RWTexture2D<float4>          render;
+RWStructuredBuffer<Renderer> stack;
+uint                         stackCount;
+
+float4x4                     transform;
+float4x4                     inverseProjection;
+
+uint                         depth;
+float                        iso;
+float4                       skybox;
+int                          maxDistance;
+
+float GetStackDistance(float3 position) {
+    float distance = maxDistance;
+    for(uint r = 0; r < stackCount; r++) {
+        distance = min(GetRendererDistance(position,stack[r]),distance);
+    }
+    return distance;
+}
+Renderer GetStackHit(float3 position) {
+    Renderer hit;
+    float distance = maxDistance;
+    for(uint r = 0; r < stackCount; r++) {
+        float rendererDistance = GetRendererDistance(position,stack[r]);
+        if(rendererDistance < distance) {
+            distance = rendererDistance;
+            hit = stack[r];
+        }
+    }
+    if(distance > iso) {
+        hit.renderIdentity = 0;
+        hit.materialIdentity = 0;
+        hit.albedo = skybox;
+    }
+    return hit;
+}
+float2 GetPixel(uint width, uint height, uint2 id) {
+    return float2(id.x*2.0f/width -1,id.y*2.0f/height -1);
+}
+float3 GetRayDirection(float2 pixel) {
+    float3 direction = mul(inverseProjection, float4(pixel.xy,0,1)).xyz;
+    direction = mul(transform, float4(direction,0)).xyz;
+    return normalize(direction);
+}
+Renderer CastRay(float3 position, float3 direction, uint depth) {
+    float distance = 0;
+    for(uint s = 0; s < depth; s++) {
+        distance = GetStackDistance(position);
+        position += direction*distance;
+        if(distance > maxDistance || distance < iso) break;
+    }
+    return GetStackHit(position);
+}
+
+[numthreads(16,16,1)]
+void Render (uint3 id : SV_DispatchThreadID) {
+    uint width,height;
+    render.GetDimensions(width,height);
+    float2 pixel = GetPixel(width,height,id.xy);
+    
+    float3 position = GetTransformPosition(transform);
+    float3 direction = GetRayDirection(pixel);
+
+    Renderer hit = CastRay(position,direction,depth);
+    render[id.xy] = GetRendererMaterial(hit);
+}
